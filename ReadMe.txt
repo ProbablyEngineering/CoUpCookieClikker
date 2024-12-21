@@ -1,6 +1,6 @@
 Use:
-	cmake -S ./Client -B build
-	cmake -S ./Server -B build
+	cmake -S ./Client -B Client/build
+	cmake -S ./Server -B Server/build
 
 Cmd Commands good to know:
 ´´´
