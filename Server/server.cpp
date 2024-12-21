@@ -1,118 +1,74 @@
 #include <iostream>
-#include <thread>
-#include <vector>
-#include <mutex>
-#include <winsock2.h>
-#include <ws2tcpip.h>
 #include <string>
-
-#pragma comment(lib, "Ws2_32.lib")
+#include "GameNetworkingSockets/steam/steamnetworkingsockets.h"
 
 class CookieClickerServer {
 private:
-    SOCKET server_socket;
-    int total_cookies;
-    std::mutex cookie_mutex;
-
-    void handle_client(SOCKET client_socket) {
-        char buffer[1024];
-        while (true) {
-            int bytes_received = recv(client_socket, buffer, sizeof(buffer) - 1, 0);
-            if (bytes_received <= 0) break; // Client disconnected
-            buffer[bytes_received] = '\0';
-
-            std::string request(buffer);
-            if (request == "C") {
-                {
-                    std::lock_guard<std::mutex> lock(cookie_mutex);
-                    total_cookies++;
-                }
-                std::string response = "Total Cookies: " + std::to_string(total_cookies) + "\n";
-                send(client_socket, response.c_str(), response.size(), 0);
-            }
-            else if (request == "EXIT") {
-                break;
-            }
-        }
-        closesocket(client_socket);
-    }
+    ISteamNetworkingSockets* networking_interface;
+    HSteamListenSocket listen_socket;
+    HSteamNetPollGroup poll_group;
 
 public:
-    CookieClickerServer(const char* port) : total_cookies(0) {
-        WSADATA wsa_data;
-        if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
-            throw std::runtime_error("WSAStartup failed");
+    CookieClickerServer(uint16 port) {
+        SteamDatagramErrMsg err_msg;
+        if (!GameNetworkingSockets_Init(nullptr, err_msg)) {
+            throw std::runtime_error("Failed to initialize GameNetworkingSockets: " + std::string(err_msg));
         }
 
-        struct addrinfo hints = {}, * result;
-        hints.ai_family = AF_INET;
-        hints.ai_socktype = SOCK_STREAM;
-        hints.ai_protocol = IPPROTO_TCP;
-        hints.ai_flags = AI_PASSIVE;
+        networking_interface = SteamNetworkingSockets();
 
-        if (getaddrinfo(nullptr, port, &hints, &result) != 0) {
-            WSACleanup();
-            throw std::runtime_error("getaddrinfo failed");
+        SteamNetworkingIPAddr server_addr;
+        server_addr.Clear(); // Reset the structure
+
+        // Use ParseString to bind to all network interfaces
+        std::string address = "0.0.0.0:" + std::to_string(port);
+        if (!server_addr.ParseString(address.c_str())) {
+            throw std::runtime_error("Invalid IP address or port: " + address);
         }
 
-        server_socket = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
-        if (server_socket == INVALID_SOCKET) {
-            freeaddrinfo(result);
-            WSACleanup();
-            throw std::runtime_error("socket creation failed");
+        listen_socket = networking_interface->CreateListenSocketIP(server_addr, 0, nullptr);
+        poll_group = networking_interface->CreatePollGroup();
+
+        if (listen_socket == k_HSteamListenSocket_Invalid || poll_group == k_HSteamNetPollGroup_Invalid) {
+            throw std::runtime_error("Failed to create listen socket or poll group");
         }
 
-        // Allow address reuse (important for restarting the server)
-        int opt = 1;
-        if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt)) == SOCKET_ERROR) {
-            freeaddrinfo(result);
-            closesocket(server_socket);
-            WSACleanup();
-            throw std::runtime_error("setsockopt failed");
-        }
-
-        // Bind to the specified address and port
-        if (bind(server_socket, result->ai_addr, (int)result->ai_addrlen) == SOCKET_ERROR) {
-            freeaddrinfo(result);
-            closesocket(server_socket);
-            WSACleanup();
-            throw std::runtime_error("bind failed");
-        }
-
-
-        freeaddrinfo(result);
-
-        if (listen(server_socket, SOMAXCONN) == SOCKET_ERROR) {
-            closesocket(server_socket);
-            WSACleanup();
-            throw std::runtime_error("listen failed");
-        }
-
-        std::cout << "Server listening on port " << port << "...\n";
+        std::cout << "Server listening on " << address << std::endl;
     }
 
     ~CookieClickerServer() {
-        closesocket(server_socket);
-        WSACleanup();
+        networking_interface->CloseListenSocket(listen_socket);
+        networking_interface->DestroyPollGroup(poll_group);
+        GameNetworkingSockets_Kill();
     }
 
     void run() {
         while (true) {
-            SOCKET client_socket = accept(server_socket, nullptr, nullptr);
-            if (client_socket == INVALID_SOCKET) continue;
+            networking_interface->RunCallbacks();
 
-            std::thread(&CookieClickerServer::handle_client, this, client_socket).detach();
+            SteamNetworkingMessage_t* messages[16];
+            int num_messages = networking_interface->ReceiveMessagesOnPollGroup(poll_group, messages, 16);
+
+            for (int i = 0; i < num_messages; ++i) {
+                std::string message((char*)messages[i]->m_pData, messages[i]->m_cbSize);
+                std::cout << "Client: " << message << std::endl;
+
+                // Echo the message back to the client
+                networking_interface->SendMessageToConnection(messages[i]->m_conn, message.c_str(), message.size(), k_nSteamNetworkingSend_Reliable, nullptr);
+                messages[i]->Release();
+            }
         }
     }
 };
 
 int main() {
     try {
-        CookieClickerServer server("12345");
+        CookieClickerServer server(12345);
         server.run();
     }
     catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
     }
+
     return 0;
 }

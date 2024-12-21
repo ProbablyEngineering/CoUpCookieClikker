@@ -1,88 +1,88 @@
 #include <iostream>
 #include <string>
-#include <winsock2.h>
-#include <ws2tcpip.h>
-
-#pragma comment(lib, "Ws2_32.lib")
+#include <thread>
+#include <chrono>
+#include "GameNetworkingSockets/steam/steamnetworkingsockets.h"
 
 class CookieClickerClient {
 private:
-    SOCKET client_socket;
+    ISteamNetworkingSockets* networking_interface;
+    HSteamNetConnection connection;
+    bool connected;
 
 public:
-    CookieClickerClient(const char* server_ip, const char* port) {
-        WSADATA wsa_data;
-        if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
-            throw std::runtime_error("WSAStartup failed");
+    CookieClickerClient(const char* server_ip, uint16 port) {
+        SteamDatagramErrMsg err_msg;
+        if (!GameNetworkingSockets_Init(nullptr, err_msg)) {
+            throw std::runtime_error("Failed to initialize GameNetworkingSockets: " + std::string(err_msg));
         }
 
-        struct addrinfo hints = {}, * result;
-        hints.ai_family = AF_INET;
-        hints.ai_socktype = SOCK_STREAM;
-        hints.ai_protocol = IPPROTO_TCP;
+        networking_interface = SteamNetworkingSockets();
 
-        if (getaddrinfo(server_ip, port, &hints, &result) != 0) {
-            WSACleanup();
-            throw std::runtime_error("getaddrinfo failed");
+        SteamNetworkingIPAddr server_addr;
+        server_addr.Clear();
+
+        // Use ParseString for IP address
+        std::string server_address = std::string(server_ip) + ":" + std::to_string(port);
+        if (!server_addr.ParseString(server_address.c_str())) {
+            throw std::runtime_error("Invalid IP address or port: " + server_address);
         }
 
-        client_socket = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
-        if (client_socket == INVALID_SOCKET) {
-            freeaddrinfo(result);
-            WSACleanup();
-            throw std::runtime_error("socket creation failed");
+        SteamNetworkingConfigValue_t options[] = {
+            {k_ESteamNetworkingConfig_TimeoutInitial, k_ESteamNetworkingConfig_Int32, {.m_int32 = 5000}}, // Initial timeout
+            {k_ESteamNetworkingConfig_TimeoutConnected, k_ESteamNetworkingConfig_Int32, {.m_int32 = 10000}} // Connected timeout
+        };
+
+        connection = networking_interface->ConnectByIPAddress(server_addr, 2, options);
+
+        if (connection == k_HSteamNetConnection_Invalid) {
+            throw std::runtime_error("Failed to create connection");
         }
 
-        std::cout << "Connecting to server...\n";
-        if (connect(client_socket, result->ai_addr, (int)result->ai_addrlen) == SOCKET_ERROR) {
-            std::cerr << "Connection failed.\n";
-            closesocket(client_socket);
-            WSACleanup();
-            return;
-        }
-        else {
-            std::cout << "Connected to server!\n";
-        }
-
-        freeaddrinfo(result);
+        connected = true;
     }
 
     ~CookieClickerClient() {
-        closesocket(client_socket);
-        WSACleanup();
+        if (connected) {
+            networking_interface->CloseConnection(connection, 0, "Client disconnected", true);
+        }
+        GameNetworkingSockets_Kill();
     }
 
     void play() {
-        char buffer[1024];
-        std::string input;
+        while (connected) {
+            SteamNetworkingMessage_t* messages[16];
+            int num_messages = networking_interface->ReceiveMessagesOnConnection(connection, messages, 16);
 
-        while (true) {
+            for (int i = 0; i < num_messages; ++i) {
+                std::string message((char*)messages[i]->m_pData, messages[i]->m_cbSize);
+                std::cout << "Server: " << message << std::endl;
+                messages[i]->Release();
+            }
+
+            // Input logic
+            std::string input;
             std::cout << "Enter 'C' to click or 'q' to quit: ";
             std::getline(std::cin, input);
 
-            if (send(client_socket, input.c_str(), input.size(), 0) == SOCKET_ERROR) {
-                std::cerr << "Send failed\n";
+            if (input == "q") {
+                connected = false;
                 break;
             }
 
-            if (input == "q") break;
-
-            int bytes_received = recv(client_socket, buffer, sizeof(buffer) - 1, 0);
-            if (bytes_received <= 0) break;
-
-            buffer[bytes_received] = '\0';
-            std::cout << buffer;
+            networking_interface->SendMessageToConnection(connection, input.c_str(), input.size(), k_nSteamNetworkingSend_Reliable, nullptr);
         }
     }
 };
 
 int main() {
     try {
-        CookieClickerClient client("192.168.0.152", "12345");
+        CookieClickerClient client("192.168.0.152", 12345);
         client.play();
     }
     catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
     }
+
     return 0;
 }
