@@ -18,10 +18,10 @@ public:
         networking_interface = SteamNetworkingSockets();
 
         SteamNetworkingIPAddr server_addr;
-        server_addr.Clear(); // Reset the structure
+        server_addr.Clear(); // Reset the structure 
 
-        // Use ParseString to bind to all network interfaces 
-        std::string address = "0.0.0.0:" + std::to_string(port);  
+        // Use ParseString to bind to all network interfaces
+        std::string address = "0.0.0.0:" + std::to_string(port);
         if (!server_addr.ParseString(address.c_str())) {
             throw std::runtime_error("Invalid IP address or port: " + address);
         }
