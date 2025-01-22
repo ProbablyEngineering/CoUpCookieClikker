@@ -1,8 +1,8 @@
 #include <iostream>
 #include <string>
 #include <thread>
-#include <chrono>
-#include "GameNetworkingSockets/steam/steamnetworkingsockets.h"
+#include <chrono> 
+#include "GameNetworkingSockets/steam/steamnetworkingsockets.h" 
 // cant use raylib inclued errors with winSuck
 
 class CookieClickerClient {
