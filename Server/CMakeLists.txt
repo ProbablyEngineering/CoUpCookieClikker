@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.0)
 set(CMAKE_CXX_STANDARD 20)
 project(server CXX)
  
-# Download Raylib
+# Download Raylib 
 include(FetchContent)
 FetchContent_Declare(raylib GIT_REPOSITORY "https://github.com/raysan5/raylib.git")
 FetchContent_MakeAvailable(raylib)
